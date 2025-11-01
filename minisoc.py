@@ -38,7 +38,7 @@ class MenuScreen(Screen):
 class ConnectionsScreen(Screen):
     def compose(self) -> ComposeResult:
         yield Header()
-        self.output = Static("🔌 Active Network Connections\n", expand=True)
+        self.output = Static(" Active Network Connections\n", expand=True)
         yield self.output
         yield Button(" Back", id="back")
         yield Footer()
@@ -133,8 +133,8 @@ class SIEMScreen(Screen):
         )
         self.output = Static("Waiting to start ingestion...", expand=True)
         yield self.output
-        yield Button("🚀 Start Ingest", id="start")
-        yield Button("🔙 Back", id="back")
+        yield Button(" Start Ingest", id="start")
+        yield Button(" Back", id="back")
         yield Footer()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
