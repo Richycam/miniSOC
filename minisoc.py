@@ -49,7 +49,7 @@ class ConnectionsScreen(Screen):
 
     async def update_connections(self):
         while self.running:
-            lines = ["🔌 Active Network Connections\n"]
+            lines = ["  Active Network Connections\n"]
             for conn in psutil.net_connections(kind='inet')[:30]:
                 laddr = f"{conn.laddr.ip}:{conn.laddr.port}" if conn.laddr else "N/A"
                 raddr = f"{conn.raddr.ip}:{conn.raddr.port}" if conn.raddr else "N/A"
@@ -77,7 +77,7 @@ class EventMonitorScreen(Screen):
 
     async def monitor_events(self):
         while self.running:
-            lines = ["📜 Event ID Monitor\n"]
+            lines = ["  Event ID Monitor\n"]
             try:
                 log_handle = win32evtlog.OpenEventLog(None, "Application")
                 flags = win32evtlog.EVENTLOG_BACKWARDS_READ | win32evtlog.EVENTLOG_SEQUENTIAL_READ
