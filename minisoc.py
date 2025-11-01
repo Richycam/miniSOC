@@ -1,17 +1,164 @@
 import psutil
-import time
-import os
-import win32evtlog  # Requires pywin32
 import socket
 import json
+import asyncio
+import win32evtlog
+from textual.app import App, ComposeResult
+from textual.widgets import Header, Footer, Button, Static, Input
+from textual.containers import Vertical, Horizontal
+from textual.screen import Screen
 
-# Event IDs to monitor
-event_id_array = [4624, 4625, 4634, 4647, 4648, 4672, 4662, 4741, 4742, 5136, 4688, 4105, 4698]
+EVENT_IDS = [4624, 4625, 4634, 4647, 4648, 4672, 4662, 4741, 4742, 5136, 4688, 4105, 4698]
 
+# Main Menu
+class MenuScreen(Screen):
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield Static("  MiniSOC Dashboard", classes="title")
+        yield Vertical(
+            Button("  Connections", id="connections"),
+            Button("  Event Monitor", id="events"),
+            Button("  Processes", id="processes"),
+            Button("  SIEM Ingest", id="siem"),
+        )
+        yield Footer()
 
-class Data:
-    @staticmethod
-    def json_all():
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        match event.button.id:
+            case "connections":
+                self.app.push_screen(ConnectionsScreen())
+            case "events":
+                self.app.push_screen(EventMonitorScreen())
+            case "processes":
+                self.app.push_screen(ProcessScreen())
+            case "siem":
+                self.app.push_screen(SIEMScreen())
+
+# Connections View
+class ConnectionsScreen(Screen):
+    def compose(self) -> ComposeResult:
+        yield Header()
+        self.output = Static("🔌 Active Network Connections\n", expand=True)
+        yield self.output
+        yield Button(" Back", id="back")
+        yield Footer()
+
+    async def on_mount(self) -> None:
+        self.running = True
+        asyncio.create_task(self.update_connections())
+
+    async def update_connections(self):
+        while self.running:
+            lines = ["🔌 Active Network Connections\n"]
+            for conn in psutil.net_connections(kind='inet')[:30]:
+                laddr = f"{conn.laddr.ip}:{conn.laddr.port}" if conn.laddr else "N/A"
+                raddr = f"{conn.raddr.ip}:{conn.raddr.port}" if conn.raddr else "N/A"
+                lines.append(f"{conn.status} | {laddr} → {raddr}")
+            self.output.update("\n".join(lines))
+            await asyncio.sleep(5)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "back":
+            self.running = False
+            self.app.pop_screen()
+
+# Event Monitor View
+class EventMonitorScreen(Screen):
+    def compose(self) -> ComposeResult:
+        yield Header()
+        self.output = Static(" Event ID Monitor\n", expand=True)
+        yield self.output
+        yield Button(" Back", id="back")
+        yield Footer()
+
+    async def on_mount(self) -> None:
+        self.running = True
+        asyncio.create_task(self.monitor_events())
+
+    async def monitor_events(self):
+        while self.running:
+            lines = ["📜 Event ID Monitor\n"]
+            try:
+                log_handle = win32evtlog.OpenEventLog(None, "Application")
+                flags = win32evtlog.EVENTLOG_BACKWARDS_READ | win32evtlog.EVENTLOG_SEQUENTIAL_READ
+                events = win32evtlog.ReadEventLog(log_handle, flags, 0)
+                for event in events:
+                    if event.EventID in EVENT_IDS:
+                        lines.append(f"ID {event.EventID} | {event.SourceName} | {event.TimeGenerated}")
+                win32evtlog.CloseEventLog(log_handle)
+            except Exception as e:
+                lines.append(f"Error: {e}")
+            self.output.update("\n".join(lines))
+            await asyncio.sleep(10)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "back":
+            self.running = False
+            self.app.pop_screen()
+
+# Process Monitor View
+class ProcessScreen(Screen):
+    def compose(self) -> ComposeResult:
+        yield Header()
+        self.output = Static(" Running Processes\n", expand=True)
+        yield self.output
+        yield Button(" Back", id="back")
+        yield Footer()
+
+    async def on_mount(self) -> None:
+        self.running = True
+        asyncio.create_task(self.monitor_processes())
+
+    async def monitor_processes(self):
+        while self.running:
+            lines = [" Running Processes\n"]
+            for proc in psutil.process_iter(['name']):
+                lines.append(f" {proc.info['name']}")
+            self.output.update("\n".join(lines))
+            await asyncio.sleep(5)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "back":
+            self.running = False
+            self.app.pop_screen()
+
+# SIEM Ingest View
+class SIEMScreen(Screen):
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield Static("📡 SIEM Ingestion")
+        yield Horizontal(
+            Input(placeholder="Host IP", id="host"),
+            Input(placeholder="Port", id="port")
+        )
+        self.output = Static("Waiting to start ingestion...", expand=True)
+        yield self.output
+        yield Button("🚀 Start Ingest", id="start")
+        yield Button("🔙 Back", id="back")
+        yield Footer()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "start":
+            host = self.query_one("#host", Input).value
+            port = self.query_one("#port", Input).value
+            if host and port.isdigit():
+                asyncio.create_task(self.send_siem_data(host, int(port)))
+        elif event.button.id == "back":
+            self.app.pop_screen()
+
+    async def send_siem_data(self, host: str, port: int):
+        self.output.update("Starting SIEM ingestion...")
+        try:
+            while True:
+                payload = json.dumps(self.collect_data())
+                with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+                    sock.sendto(payload.encode('utf-8'), (host, port))
+                self.output.update(" SIEM data sent.")
+                await asyncio.sleep(5)
+        except Exception as e:
+            self.output.update(f" Failed: {e}")
+
+    def collect_data(self):
         connections = []
         for conn in psutil.net_connections(kind='inet'):
             laddr = f"{conn.laddr.ip}:{conn.laddr.port}" if conn.laddr else "N/A"
@@ -28,150 +175,26 @@ class Data:
             log_handle = win32evtlog.OpenEventLog(None, "Application")
             flags = win32evtlog.EVENTLOG_BACKWARDS_READ | win32evtlog.EVENTLOG_SEQUENTIAL_READ
             raw_events = win32evtlog.ReadEventLog(log_handle, flags, 0)
-            while raw_events:
-                for event in raw_events:
-                    if event.EventID in event_id_array:
-                        events.append({
-                            "event_id": event.EventID,
-                            "source": event.SourceName,
-                            "time": str(event.TimeGenerated)
-                        })
+            for event in raw_events:
+                if event.EventID in EVENT_IDS:
+                    events.append({
+                        "event_id": event.EventID,
+                        "source": event.SourceName,
+                        "time": str(event.TimeGenerated)
+                    })
             win32evtlog.CloseEventLog(log_handle)
         except Exception as e:
             events.append({"error": str(e)})
 
-        return {
-            "connections": connections,
-            "events": events
-        }
+        return {"connections": connections, "events": events}
 
-# Menu display
-menu_main = """
-################################################################################################
+# App Entry Point
+class MiniSOCApp(App):
+    CSS_PATH = None
+    BINDINGS = [("q", "quit", "Quit")]
 
-            .   , , .  . ,  ,-.   ,-.   ,-.                  
-            |\\ /| | |\\ | | (   ` /   \\ /   
-            | V | | | \\| |  `-.  |   | |   
-            |   | | |  | | .   ) \\   / \\   
-            '   ' ' '  ' '  `-'   `-'   `-'                                             
-                                1.0.0                  
+    def on_mount(self) -> None:
+        self.push_screen(MenuScreen())
 
-1.          Connections
-2.          Event ID Monitor
-3.          Processes 
-4.          SIEM Ingest 
-
-################################################################################################
-"""
-
-# Terminal clear
-def clear_terminal():
-    os.system("cls" if os.name == "nt" else "clear")
-
-
-
-# Case 1: Network connections
-class One:
-    @staticmethod
-    def get_all_connections():
-        connections = psutil.net_connections(kind='inet')
-        try:
-            for conn in connections:
-                while connections:
-                    laddr = f"{conn.laddr.ip}:{conn.laddr.port}" if conn.laddr else "N/A"
-                    raddr = f"{conn.raddr.ip}:{conn.raddr.port}" if conn.raddr else "N/A"
-                    print(f"Type: {conn.type}, Status: {conn.status}, Local: {laddr}, Remote: {raddr}")
-        except KeyboardInterrupt:
-            print("\n Monitoring stopped.")
-
-
-
-
-# Case 2: Event log monitor
-class Two:
-    @staticmethod
-    def monitor_event_logs(server=None, log_type="Application"):
-        print(f"Monitoring {log_type} logs... Press Ctrl+C to stop.")
-        try:
-            while True:
-                log_handle = win32evtlog.OpenEventLog(server, log_type)
-                flags = win32evtlog.EVENTLOG_BACKWARDS_READ | win32evtlog.EVENTLOG_SEQUENTIAL_READ
-                events = win32evtlog.ReadEventLog(log_handle, flags, 0)
-                while events:
-                    for event in events:
-                        if event.EventID in event_id_array:
-                            print(f" Event ID: {event.EventID}, Source: {event.SourceName}, Time: {event.TimeGenerated}")
-                win32evtlog.CloseEventLog(log_handle)
-                time.sleep(5)
-        except KeyboardInterrupt:
-            print("\n Monitoring stopped.")
-        except Exception as e:
-            print(f"Error: {e}")
-
-
-
-
-# Case 3: Process list
-class Three:
-    def list_processes():
-        try:
-            while True:
-                process_list = [proc.name() for proc in psutil.process_iter()]
-                for process_name in process_list:
-                    print(f" Process: {process_name}")
-                time.sleep(5)  # Optional delay between refreshes
-        except KeyboardInterrupt:
-            print(" Process monitoring stopped.")
-
-
-# Case 4: SIEM ingestion
-
-
-class Connection:
-    @staticmethod
-    def send_json_udp(host: str, port: int):
-        try:
-            json_payload = json.dumps(Data.json_all())
-            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
-                sock.sendto(json_payload.encode('utf-8'), (host, port))
-                print(" SIEM data sent.")
-        except Exception as e:
-            print(f" Failed to send SIEM data: {e}")
-
-
-
-class Four:
-    @staticmethod
-    def siem_inter():
-        host = input("Host IP for SIEM: ")
-        port = int(input("Port to send to: "))
-        print("Press Ctrl+C to stop sending data.\n")
-        try:
-            while True:
-                Connection.send_json_udp(host, port)
-                time.sleep(5)
-        except KeyboardInterrupt:
-            print(" SIEM ingestion stopped.")
-
-
-
-
-# Main loop
-def main():
-    choice = input("minisoc > ")
-    match choice:
-        case "1":
-            One.get_all_connections()
-        case "2":
-            Two.monitor_event_logs()
-        case "3":
-            Three.list_processes()
-        case "4":
-            Four.siem_inter()
-
-# Runtime loop
-while True:
-    print(menu_main)
-    main()
-    clear_terminal()
-
+if __name__ == "__main__":
+    MiniSOCApp().run()
